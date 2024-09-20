@@ -84,11 +84,43 @@ int main(int argc, char *argv[])
 		for (Process* process : processes)
 		{
 			bool is_running = process->is_running();
+			std::string time_elapsed = "";
+			if (is_running) {
+				unsigned int seconds = 0;
+				unsigned int minutes = 0;
+				unsigned int hours = 0;
+				unsigned int days = 0;
+
+				div_t minuteAndSecond = div((int)(now - process->get_start_time()), (int)60);
+				seconds = minuteAndSecond.rem;
+				minutes = minuteAndSecond.quot;
+				div_t hourAndMinute = div((int)minutes, (int)60);
+				minutes = hourAndMinute.rem;
+				hours = hourAndMinute.quot;
+				div_t dayAndHour = div((int)hours, (int)24);
+				hours = dayAndHour.rem;
+				days = dayAndHour.quot;
+
+				if (days > 0) {
+					time_elapsed += std::to_string(days) + " days ";
+				}
+				if (hours > 0) {
+					time_elapsed += std::to_string(hours) + " hours ";
+				}
+				if (minutes > 0) {
+					time_elapsed += std::to_string(minutes) + " minutes ";
+				}
+				if (seconds > 0) {
+					time_elapsed += std::to_string(seconds) + " seconds ";
+				}
+				time_elapsed += "ago";
+			}
+
 			printf("%d. %s (%s) (%s)\n", 
 				i++, 
 				process->get_name().c_str(), 
 				is_running ? "Running" : "Stopped",
-				is_running ? std::to_string(now - process->get_start_time()).append(" seconds ago").c_str() : ""
+				time_elapsed.c_str()
 				);
 			bool is_time_to_check = process->is_time_to_check();
 			if (is_time_to_check)
