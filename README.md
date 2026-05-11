@@ -4,7 +4,7 @@ Simple Process Manager for Windows
 
 ## Usage
 
-You need to write the configuration somewhere and run this command in commandline:
+You need to write the configuration somewhere and run this command in command line:
 
 ```sh
 simple-pm.exe /path/to/config.yaml
@@ -12,10 +12,11 @@ simple-pm.exe /path/to/config.yaml
 
 ## Configuration File
 
-The configuration use YAML format (https://yaml.org/). There are two types to run a process, by command or by path with argument(s). Here are some examples to run process:
+The configuration uses YAML format (https://yaml.org/). There are two types to run a process, by command or by path with argument(s). Here are some examples to run process:
 
 ```yaml
 exe-process:
+  window-name: Program
   path: .\program.exe
   checking-interval: 10
 
@@ -31,4 +32,4 @@ npm-script:
   checking-interval: 5
 ```
 
-Those 3 processes will be monitored by each process' interval. For example, a process named `exe-process` is to run `program.exe` and will re-run every 10 seconds if the current `exe-process` is closed.
+Those 3 processes will be monitored by each process' interval. For example, a process named `exe-process` is monitored every 10 seconds, if it is not running, it will be started by the path `.\program.exe`.

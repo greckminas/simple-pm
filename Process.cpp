@@ -26,7 +26,7 @@ void Process::Init()
 	}
 }
 
-Process::Process(std::string name, std::string path, std::string args, std::string working_dir, unsigned int check_interval)
+Process::Process(std::string name, std::string path, std::string args, std::string working_dir, unsigned int check_interval, std::string window_name)
 {
 	if (Process::hProcessJob == NULL)
 	{
@@ -34,6 +34,7 @@ Process::Process(std::string name, std::string path, std::string args, std::stri
 	}
 
 	this->process_handle = NULL;
+	this->job_handle = NULL;
 	this->start_time = 0;
 	this->last_checked_time = 0;
 
@@ -42,11 +43,12 @@ Process::Process(std::string name, std::string path, std::string args, std::stri
 	this->args = args;
 	this->working_dir = working_dir;
 	this->check_interval = check_interval;
+	this->window_name = window_name;
 }
 
 Process::~Process()
 {
-	if (this->process_handle != NULL)
+	if (this->process_handle != NULL || this->job_handle != NULL)
 	{
 		this->stop();
 	}
@@ -70,6 +72,11 @@ std::string Process::get_args()
 std::string Process::get_working_dir()
 {
 	return this->working_dir;
+}
+
+std::string Process::get_window_name()
+{
+	return this->window_name;
 }
 
 time_t Process::get_start_time()
@@ -104,7 +111,7 @@ void Process::set_check_interval(unsigned int check_interval)
 
 bool Process::is_running()
 {
-	if (this->process_handle == NULL)
+	if (this->process_handle == NULL || this->job_handle == NULL)
 	{
 		return false;
 	}
@@ -112,7 +119,18 @@ bool Process::is_running()
 	DWORD exit_code;
 	GetExitCodeProcess(this->process_handle, &exit_code);
 
-	return exit_code == STILL_ACTIVE;
+	bool is_still_active = exit_code == STILL_ACTIVE;
+
+	if (!is_still_active)
+	{
+		CloseHandle(this->process_handle);
+		this->process_handle = NULL;
+
+		CloseHandle(this->job_handle);
+		this->job_handle = NULL;
+	}
+
+	return is_still_active;
 }
 
 bool Process::is_time_to_check()
@@ -136,21 +154,39 @@ bool Process::start()
 	STARTUPINFO si;
 	PROCESS_INFORMATION pi;
 
-	ZeroMemory(&si, sizeof(si));
-	si.cb = sizeof(si);
-	ZeroMemory(&pi, sizeof(pi));
-
-	std::string command = this->path + " " + this->args;
-
-	if (!CreateProcessA(NULL, (LPSTR)command.c_str(), NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL, this->working_dir.empty() ? NULL : this->working_dir.c_str(), &si, &pi))
+	HANDLE hJob = CreateJobObject(NULL, NULL);
+	if (hJob == NULL)
 	{
 		this->set_last_checked_time(time(NULL));
 		return false;
 	}
-	
+
+	JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = { 0 };
+	jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+	SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	if (!this->window_name.empty())
+		si.lpTitle = (LPSTR)this->window_name.c_str();
+	ZeroMemory(&pi, sizeof(pi));
+
+	std::string command = this->path + " " + this->args;
+
+	if (!CreateProcessA(NULL, (LPSTR)command.c_str(), NULL, NULL, FALSE, CREATE_NEW_CONSOLE | CREATE_SUSPENDED, NULL, this->working_dir.empty() ? NULL : this->working_dir.c_str(), &si, &pi))
+	{
+		this->set_last_checked_time(time(NULL));
+		CloseHandle(hJob);
+		return false;
+	}
+
+	AssignProcessToJobObject(hJob, pi.hProcess);
+	ResumeThread(pi.hThread);
 	CloseHandle(pi.hThread);
 
 	this->process_handle = pi.hProcess;
+	this->job_handle = hJob;
+
 	this->set_start_time(time(NULL));
 	this->set_last_checked_time(time(NULL));
 
@@ -159,14 +195,18 @@ bool Process::start()
 
 bool Process::stop()
 {
-	if (this->process_handle == NULL)
+	if (this->process_handle == NULL || this->job_handle == NULL)
 	{
 		return false;
 	}
 
-	TerminateProcess(this->process_handle, 0);
+	TerminateJobObject(this->job_handle, 0);
+
 	CloseHandle(this->process_handle);
 	this->process_handle = NULL;
+
+	CloseHandle(this->job_handle);
+	this->job_handle = NULL;
 
 	return true;
 }

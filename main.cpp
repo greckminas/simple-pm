@@ -5,34 +5,43 @@
 #include <yaml-cpp/yaml.h>
 #pragma warning(pop)
 
+#include <conio.h>
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <vector>
+#include <map>
+#include <thread>
+#include <atomic>
 #include "Process.h"
 
-std::vector<Process*> processes;
+std::map<std::string, Process*> processes;
 
-int main(int argc, char *argv[])
-{
-	// usage:
-	// .\simple-pm.exe /path/to/config.yaml
-	if (argc != 2)
-	{
-		std::cout << "Usage: " << argv[0] << " /path/to/config.yaml" << std::endl;
-		return 1;
+struct ProcessConfig {
+	std::string path;
+	std::string args;
+	std::string working_dir;
+	unsigned int check_interval;
+	std::string window_name;
+
+	bool operator==(const ProcessConfig& other) const {
+		return path == other.path && 
+			args == other.args &&
+			working_dir == other.working_dir &&
+			window_name == other.window_name;
 	}
+};
 
-	Process::Init();
+struct State {
+	std::atomic_bool need_reload{ false };
+} state;
 
-	// open config file
-	YAML::Node config = YAML::LoadFile(argv[1]);
+static bool parse_config(const std::string& config_path, std::map<std::string, ProcessConfig>& out)
+{
+	YAML::Node config = YAML::LoadFile(config_path);
 	bool is_valid = true;
 
 	for (auto it = config.begin(); it != config.end(); ++it)
 	{
-		// key = process name
-		// value = process config
 		std::string process_name = it->first.as<std::string>();
 		YAML::Node process_config = it->second;
 
@@ -42,7 +51,7 @@ int main(int argc, char *argv[])
 			is_valid = false;
 			continue;
 		}
-		
+
 		std::string path = process_config["path"].IsDefined() ? process_config["path"].as<std::string>() : "";
 		std::string args = process_config["args"].IsDefined() ? process_config["args"].as<std::string>() : "";
 		std::string command = process_config["command"].IsDefined() ? process_config["command"].as<std::string>() : "";
@@ -56,7 +65,8 @@ int main(int argc, char *argv[])
 		}
 
 		std::string working_dir = process_config["working-dir"].IsDefined() ? process_config["working-dir"].as<std::string>() : "";
-		unsigned int check_interval = process_config["check-interval"].IsDefined() ? process_config["check-interval"].as<unsigned int>() : 10;
+		unsigned int check_interval = process_config["checking-interval"].IsDefined() ? process_config["checking-interval"].as<unsigned int>() : 10;
+		std::string window_name = process_config["window-name"].IsDefined() ? process_config["window-name"].as<std::string>() : "";
 
 		if (path.empty())
 		{
@@ -65,23 +75,121 @@ int main(int argc, char *argv[])
 			continue;
 		}
 
-		Process *process = new Process(process_name, path, args, working_dir, check_interval);
-		processes.push_back(process);
+		out[process_name] = { path, args, working_dir, check_interval, window_name };
 	}
 
-	if (!is_valid)
+	return is_valid;
+}
+
+bool load_config(const std::string& config_path)
+{
+	std::map<std::string, ProcessConfig> new_configs;
+	if (!parse_config(config_path, new_configs))
+		return false;
+
+	YAML::Node config = YAML::LoadFile(config_path);
+	if (config["window-name"].IsDefined())
+		SetConsoleTitleA(config["window-name"].as<std::string>().c_str());
+
+	// Remove processes that are no longer in the config
+	for (auto it = processes.begin(); it != processes.end(); )
+	{
+		if (new_configs.find(it->first) == new_configs.end())
+		{
+			delete it->second;
+			it = processes.erase(it);
+		}
+		else
+		{
+			++it;
+		}
+	}
+
+	// Add new or restart changed processes
+	for (auto& [name, cfg] : new_configs)
+	{
+		auto it = processes.find(name);
+		if (it != processes.end())
+		{
+			Process* p = it->second;
+			ProcessConfig existing_cfg = { p->get_path(), p->get_args(), p->get_working_dir(), p->get_check_interval(), p->get_window_name() };
+			if (!(existing_cfg == cfg))
+			{
+				// Config changed: stop and replace the process
+				if (p->is_running())
+				{
+					if (!p->stop())
+						std::cout << "Failed to stop process: " << name << std::endl;
+				}
+				delete p;
+				it->second = new Process(name, cfg.path, cfg.args, cfg.working_dir, cfg.check_interval, cfg.window_name);
+			}
+			// else: unchanged, keep as-is
+		}
+		else
+		{
+			processes[name] = new Process(name, cfg.path, cfg.args, cfg.working_dir, cfg.check_interval, cfg.window_name);
+		}
+	}
+
+	return true;
+}
+
+void keyboard_listener(const std::string& config_path) {
+	while (true)
+	{
+		if (_kbhit())
+		{
+			int ch = _getch();
+			if (ch == 'r' || ch == 'R')
+			{
+				state.need_reload = true;
+			}
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+}
+
+int main(int argc, char *argv[])
+{
+	// usage:
+	// .\simple-pm.exe /path/to/config.yaml
+	if (argc != 2)
+	{
+		std::cout << "Usage: " << argv[0] << " /path/to/config.yaml" << std::endl;
+		return 1;
+	}
+
+	Process::Init();
+
+	if (!load_config(argv[1]))
 	{
 		system("pause");
 		return 1;
 	}
 
+	std::thread(keyboard_listener, std::string(argv[1])).detach();
+
 	while (true)
 	{
+		if (state.need_reload)
+		{
+			if (!load_config(argv[1]))
+			{
+				std::cout << "Failed to reload config." << std::endl;
+				state.need_reload = false;
+				std::this_thread::sleep_for(std::chrono::seconds(2));
+				continue;
+			}
+			state.need_reload = false;
+		}
+
 		system("cls");
-		printf("Simple Process Manager\n\n");
+		printf("Simple Process Manager\n");
+		printf("Press R to reload config\n\n");
 		unsigned int i = 1;
 		time_t now = time(0);
-		for (Process* process : processes)
+		for (auto& [name, process] : processes)
 		{
 			bool is_running = process->is_running();
 			std::string time_elapsed = "";
@@ -92,14 +200,14 @@ int main(int argc, char *argv[])
 				unsigned int days = 0;
 
 				div_t minuteAndSecond = div((int)(now - process->get_start_time()), (int)60);
-				seconds = minuteAndSecond.rem;
 				minutes = minuteAndSecond.quot;
+				seconds = minuteAndSecond.rem;
 				div_t hourAndMinute = div((int)minutes, (int)60);
-				minutes = hourAndMinute.rem;
 				hours = hourAndMinute.quot;
+				minutes = hourAndMinute.rem;
 				div_t dayAndHour = div((int)hours, (int)24);
-				hours = dayAndHour.rem;
 				days = dayAndHour.quot;
+				hours = dayAndHour.rem;
 
 				if (days > 0) {
 					time_elapsed += std::to_string(days) + " days ";
@@ -129,7 +237,7 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		Sleep(1000);
+		std::this_thread::sleep_for(std::chrono::seconds(1));
 	}
 
 	return 0;

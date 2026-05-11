@@ -9,10 +9,12 @@ class Process
 private:
 	static HANDLE hProcessJob;
 	HANDLE process_handle;
+	HANDLE job_handle;
 	std::string name;
 	std::string path;
 	std::string args;
 	std::string working_dir;
+	std::string window_name;
 
 	time_t start_time;
 	time_t last_checked_time;
@@ -25,13 +27,14 @@ private:
 public:
 	static void Init();
 
-	Process(std::string name, std::string path, std::string args, std::string working_dir, unsigned int check_interval);
+	Process(std::string name, std::string path, std::string args, std::string working_dir, unsigned int check_interval, std::string window_name = "");
 	~Process();
 
 	std::string get_name();
 	std::string get_path();
 	std::string get_args();
 	std::string get_working_dir();
+	std::string get_window_name();
 	time_t get_start_time();
 	time_t get_last_checked_time();
 	unsigned int get_check_interval();
